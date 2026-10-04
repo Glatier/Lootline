@@ -45,6 +45,12 @@ Every test file ends with `RESULT: 0 failure(s)` when everything passes.
 The idea and the look come from the "Loot Frame" WeakAura by Hypocrit: https://wago.io/-IWPKK1il.
 Lootline is written from scratch and contains no code from it.
 
+## Support
+
+If you like Lootline and want to buy me a coffee:
+
+<a href="https://buymeacoffee.com/lastern"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="45"></a>
+
 ## License
 
 MIT, see [LICENSE](LICENSE). The sound file `Lootline/Media/wilhelm.ogg` is not covered by the license.
