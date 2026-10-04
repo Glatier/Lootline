@@ -1,0 +1,9 @@
+# release packages
+*.zip
+
+# editor / OS files
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

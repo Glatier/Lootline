@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lootline Lua harness</title>
+<script src="https://cdn.jsdelivr.net/npm/fengari-web@0.1.4/dist/fengari-web.js"></script>
+<style>body{font:13px monospace;background:#111;color:#ddd;padding:12px}pre{white-space:pre-wrap}</style>
+</head>
+<body>
+<pre id="out">running...</pre>
+<script>
+// For each test: fresh Lua state, loads tests/wowmock.lua, then the addon files from the .toc order
+// (Lootline.lua, Options.lua) called with ("Lootline", <shared addon table>), then the test script.
+// ?test=smoke.lua | anim.lua | options.lua | all. window.__result holds the final text output.
+const ADDON_FILES = ['Lootline.lua', 'Options.lua'];
+const ALL_TESTS = ['smoke.lua', 'anim.lua', 'options.lua', 'migrate.lua', 'migrate_custom.lua', 'fastloot.lua'];
+const NS = {};
+async function run(testFile) {
+  const { lua, lauxlib, lualib, to_luastring } = fengari;
+  const L = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(L);
+  const out = [];
+  const get = async (p) => { const r = await fetch(p + '?t=' + performance.now()); if (!r.ok) throw new Error(p + ' ' + r.status); return r.text(); };
+  function runChunk(src, name, args) {
+    if (lauxlib.luaL_loadbuffer(L, to_luastring(src), null, to_luastring('@' + name)) !== 0) {
+      out.push('COMPILE ERROR ' + name + ': ' + lua.lua_tojsstring(L, -1)); lua.lua_pop(L, 1); return false;
+    }
+    (args || []).forEach(a => {
+      if (a === NS) lua.lua_getglobal(L, to_luastring('__ns'));
+      else if (a === null) lua.lua_newtable(L);
+      else lua.lua_pushstring(L, to_luastring(a));
+    });
+    if (lua.lua_pcall(L, (args || []).length, 0, 0) !== 0) {
+      out.push('RUNTIME ERROR ' + name + ': ' + lua.lua_tojsstring(L, -1)); lua.lua_pop(L, 1); return false;
+    }
+    return true;
+  }
+  function flushPrints() {
+    lua.lua_getglobal(L, to_luastring('__out'));
+    if (lua.lua_istable(L, -1)) {
+      const n = lauxlib.luaL_len(L, -1);
+      for (let i = 1; i <= n; i++) { lua.lua_geti(L, -1, i); out.push(lua.lua_tojsstring(L, -1)); lua.lua_pop(L, 1); }
+    }
+    lua.lua_pop(L, 1);
+    runChunk('__out = {}', 'reset');
+  }
+  try {
+    const sources = await Promise.all([
+      get('/tests/wowmock.lua'),
+      ...ADDON_FILES.map(f => get('/Lootline/' + f)),
+      get('/tests/' + testFile),
+    ]);
+    const mock = sources[0], tests = sources[sources.length - 1];
+    let ok = runChunk(mock, 'wowmock.lua') && runChunk('__ns = {}', 'ns');
+    flushPrints();
+    for (let i = 0; ok && i < ADDON_FILES.length; i++) {
+      ok = runChunk(sources[i + 1], ADDON_FILES[i], ['Lootline', NS]);
+      flushPrints();
+    }
+    if (ok) { runChunk(tests, testFile); flushPrints(); }
+  } catch (e) { out.push('JS ERROR: ' + e); }
+  return out.join('\n');
+}
+async function main(which) {
+  const files = which === 'all' ? ALL_TESTS : [which];
+  const parts = [];
+  for (const f of files) parts.push('===== ' + f + ' =====\n' + await run(f));
+  const text = parts.join('\n\n');
+  document.getElementById('out').textContent = text;
+  window.__result = text;
+  return text;
+}
+const params = new URLSearchParams(location.search);
+window.__run = main;
+main(params.get('test') || 'all');
+</script>
+</body>
+</html>
