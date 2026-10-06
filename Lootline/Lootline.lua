@@ -1325,6 +1325,15 @@ local function Watch(session)
 	end)
 end
 
+-- keeps the game's loot window shut for this loot (unless it is already open)
+local function HideLootWindow()
+	local frame = LootFrame
+	if frame and frame.IsEventRegistered and frame:IsEventRegistered("LOOT_OPENED") and not frame:IsShown() then
+		frame:UnregisterEvent("LOOT_OPENED")
+		FL.owned = true
+	end
+end
+
 -- first LOOT_READY of a loot
 local function FastLoot()
 	FL.session = FL.session + 1
@@ -1333,7 +1342,17 @@ local function FastLoot()
 	FL.src = (src and not IsSecret(src)) and src or nil
 	if not db.fastLoot or IsModifiedClick("AUTOLOOTTOGGLE") then return end -- Shift: the usual window
 	local n = GetNumLootItems()
-	if not n or IsSecret(n) or n == 0 then return end
+	if not n or IsSecret(n) then return end
+	if n == 0 then
+		-- An empty loot ("There is no loot."): the corpse was clicked again before the client saw
+		-- it emptied, which fast looting makes easy. No empty window; end the loot right away.
+		HideLootWindow()
+		local session = FL.session
+		C_Timer.After(0, function()
+			if session == FL.session then CloseLoot() end
+		end)
+		return
+	end
 	if GetTime() < FL.skipUntil and (FL.skipSrc == nil or FL.skipSrc == FL.src) then
 		FL.skipSrc, FL.skipUntil = nil, 0
 		return
@@ -1346,13 +1365,9 @@ local function FastLoot()
 		if kind == "item" then items = items + 1 end
 	end
 	if items > 0 and FreeBagSlots() == 0 then return end
-	local frame = LootFrame
-	if frame and frame.IsEventRegistered and frame:IsEventRegistered("LOOT_OPENED") and not frame:IsShown() then
-		frame:UnregisterEvent("LOOT_OPENED")
-		FL.owned = true
-		if IsFishingLoot and IsFishingLoot() and SOUNDKIT and SOUNDKIT.FISHING_REEL_IN then
-			PlaySound(SOUNDKIT.FISHING_REEL_IN) -- the hidden window would have played it
-		end
+	HideLootWindow()
+	if FL.owned and IsFishingLoot and IsFishingLoot() and SOUNDKIT and SOUNDKIT.FISHING_REEL_IN then
+		PlaySound(SOUNDKIT.FISHING_REEL_IN) -- the hidden window would have played it
 	end
 	for slot = n, 1, -1 do LootSlot(slot) end
 	if FL.owned then Watch(FL.session) end

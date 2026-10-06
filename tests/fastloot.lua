@@ -147,4 +147,22 @@ SlashCmdList.LOOTLINE("fastloot")
 check(db.fastLoot == false and LootFrame:IsEventRegistered("LOOT_OPENED"), "and off again, giving the window back mid-loot")
 closeWindow()
 
+-- 8. an empty loot (corpse clicked again before the client saw it emptied): no empty window
+db.fastLoot = true
+shows, closes = __lootWindowShows, __closeLootCalls
+__openLoot({}, "Creature-13")
+check(__lootWindowShows == shows and not LootFrame:IsShown(), "empty loot: no empty loot window")
+settle()
+check(__closeLootCalls == closes + 1 and LootFrame:IsEventRegistered("LOOT_OPENED"), "the empty loot is closed and the window given back")
+LootFrame:Show()
+__lootSlots, __lootSlotCalls = {}, {}
+__fire("LOOT_READY", false)
+settle()
+check(not LootFrame:IsShown() and LootFrame:IsEventRegistered("LOOT_OPENED"), "empty window already open (LOOT_OPENED came first): closed")
+db.fastLoot = false
+shows = __lootWindowShows
+__openLoot({}, "Creature-14")
+check(__lootWindowShows == shows + 1, "off: an empty loot opens the window as before")
+closeWindow()
+
 print(("RESULT: %d failure(s)"):format(failures))

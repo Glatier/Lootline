@@ -19,6 +19,7 @@ Settings are in Esc > Options > AddOns > Lootline, or type `/lootline`. `/lootli
 - Glowing border for expensive loot, with your own price levels
 - Gold, currencies and reputation in the same list
 - Optional faster auto loot without the loot window
+- Gamepad ready: works with the gamepad interface style
 - Filters by type, quality and price, and an ignore list (Shift+Right-click a bar)
 - Adjustable position, size, font, durations and stack direction
 
