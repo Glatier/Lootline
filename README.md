@@ -17,8 +17,10 @@ Settings are in Esc > Options > AddOns > Lootline, or type `/lootline`. `/lootli
 - One bar per item you pick up, with icon, quality colour, stack count and vendor price
 - Auction prices if you use Auctionator
 - Glowing border for expensive loot, with your own price levels
-- Gold, currencies and reputation in the same list
+- Gold, currencies and reputation in the same list, and optionally profession skill-ups
+- Farm counter: gold and item value looted, gold per hour and best items, in its own window (Classic, Modern or Minimal) opened from a minimap button
 - Optional faster auto loot without the loot window
+- A chat message when your bags are almost full
 - Gamepad ready: works with the gamepad interface style
 - Filters by type, quality and price, and an ignore list (Shift+Right-click a bar)
 - Adjustable position, size, font, durations and stack direction

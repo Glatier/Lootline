@@ -19,11 +19,14 @@ LootlineDB = {
 	minValue = 1.5,
 	tsmSource = "DBMarket",
 	spacing = 8,
+	durations = { rep = 15, skill = 10, common = 7 },
 	blacklist = { ["item:1"] = "keep me" },
 }
 __fire("ADDON_LOADED", "Lootline")
 local db = LootlineDB
-check(db.version == 3, "version 3")
+check(db.version == 4, "version 4")
+check(db.durations.rep == 5 and db.durations.skill == 5, "old default reputation / profession durations (15 / 10 s) -> 5 s")
+check(db.durations.common == 7 and db.durations.money == 5, "other durations kept, missing ones filled in")
 check(db.point[1] == "CENTER" and db.point[2] == "CENTER" and db.point[3] == -400 and db.point[4] == 95, "old default position -> new default")
 check(db.width == 350 and db.grow == "down", "old default width / grow -> 350 / down")
 check(db.thresholds[1] == 10000 and db.thresholds[2] == 50000 and db.thresholds[3] == 100000, "old default tiers -> 1g / 5g / 10g")

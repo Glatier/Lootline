@@ -2,10 +2,13 @@
 ## Title: Lootline
 ## Notes: Shows what you just looted (items, money, currency, reputation) as notification bars.
 ## Author: Lastern
-## Version: 1.6.1
+## Version: 1.7.0
 ## X-License: MIT
 ## SavedVariables: LootlineDB
+## SavedVariablesPerCharacter: LootlineFarm
+## OptionalDeps: Auctionator
 ## IconTexture: Interface\AddOns\Lootline\Media\icon
 
 Lootline.lua
+Farm.lua
 Options.lua

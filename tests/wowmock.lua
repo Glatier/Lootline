@@ -121,6 +121,7 @@ function Widget:IsMouseEnabled() return self.__mouse end
 function Widget:IsMouseOver() return self.__mouseOver == true end
 function Widget:SetMovable() end
 function Widget:SetClampedToScreen() end
+function Widget:SetClampRectInsets(l, r, t, b) self.__clampInsets = { l, r, t, b } end
 function Widget:SetFrameStrata(s) self.__strata = s end
 function Widget:GetFrameStrata() return self.__strata or "MEDIUM" end
 function Widget:SetUserPlaced(b) self.__userPlaced = b end
@@ -168,7 +169,7 @@ function Widget:SetVertexColor(r, g, b, a) self.__vertex = { r, g, b, a } end
 function Widget:SetTexCoord(...) self.__texcoord = { ... } end
 function Widget:SetDrawLayer() end
 function Widget:SetBlendMode(m) self.__blend = m end
-function Widget:SetDesaturated() end
+function Widget:SetDesaturated(d) self.__desaturated = d end
 function Widget:SetAtlas(a) self.__atlas = a end
 function Widget:SetGradient() end
 function Widget:SetRotation(r) self.__rotation = r end
@@ -250,13 +251,18 @@ function Widget:ClearFocus()
 	if had and self.__scripts.OnEditFocusLost then self.__scripts.OnEditFocusLost(self) end
 end
 -- tooltip
-function Widget:SetOwner(owner) self.__owner = owner end
+function Widget:SetOwner(owner) self.__owner = owner; self.__lines = {} end
 function Widget:IsOwned(f) return self.__owner == f end
 function Widget:SetHyperlink(l) self.__link = l end
 function Widget:SetCurrencyByID() end
-function Widget:AddLine() end
-function Widget:AddDoubleLine() end
-function Widget:ClearLines() end
+-- tooltip lines are kept as text ("left | right" for double lines) so tests can read them
+function Widget:AddLine(t) self.__lines = self.__lines or {}; self.__lines[#self.__lines + 1] = tostring(t) end
+function Widget:AddDoubleLine(l, r)
+	self.__lines = self.__lines or {}
+	self.__lines[#self.__lines + 1] = tostring(l) .. " | " .. tostring(r)
+end
+function Widget:ClearLines() self.__lines = {} end
+function Widget:SetHighlightTexture(t) self.__highlight = t end
 -- animation groups
 function Widget:CreateAnimationGroup(name)
 	local g = NewObject("AnimationGroup", self, name)
@@ -343,6 +349,13 @@ LootFrame:SetScript("OnEvent", function(self, event)
 		self:Hide()
 	end
 end)
+
+Minimap = CreateFrame("Frame", "Minimap", UIParent)
+Minimap:SetSize(140, 140)
+__cursor = { 0, 0 } -- GetCursorPosition, in the same units as frame centres (scale 1)
+function GetCursorPosition() return __cursor[1], __cursor[2] end
+-- wall clock in seconds; follows __tick
+function time() return 1700000000 + math.floor(__now) end
 
 -- events -------------------------------------------------------------------
 function __fire(event, ...)

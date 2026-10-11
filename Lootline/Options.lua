@@ -131,6 +131,11 @@ local function GamepadUI()
 	return not ok or on == true -- when unsure, stay on the safe side (no menu)
 end
 
+-- dropdown / context menus are safe to open (also used by the minimap button)
+function ns.CanShowMenu()
+	return MenuUtil ~= nil and MenuUtil.CreateContextMenu ~= nil and not GamepadUI()
+end
+
 -- options = { {value, "Label"}, ... }. Mouse & keyboard: click opens a dropdown menu.
 -- Gamepad interface style (or no menu API): click steps to the next option.
 -- Right-click always steps back.
@@ -308,16 +313,23 @@ local function BuildLayoutPage(p)
 	Section(p, "Size", -170)
 	Slider(p, "Scale", 16, -198, 0.5, 2, 0.05, Getter("scale"), Setter("scale"),
 		function(v) return format("%.2f", v) end)
-	Slider(p, "Bar width", 16, -226, 200, 800, 10, Getter("width"), Setter("width"))
-	Slider(p, "Bar height", 16, -254, 20, 80, 1, Getter("rowHeight"), Setter("rowHeight"))
-	Slider(p, "Spacing", 16, -282, 0, 30, 1, Getter("spacing"), Setter("spacing"))
-	Slider(p, "Font size", 16, -310, 8, 24, 1, Getter("fontSize"), Setter("fontSize"))
-	Slider(p, "Max bars", 16, -338, 1, 20, 1, Getter("maxRows"), Setter("maxRows"), nil,
+	Slider(p, "Bar width", 16, -224, 200, 800, 10, Getter("width"), Setter("width"))
+	Slider(p, "Bar height", 16, -250, 20, 80, 1, Getter("rowHeight"), Setter("rowHeight"))
+	Slider(p, "Spacing", 16, -276, 0, 30, 1, Getter("spacing"), Setter("spacing"))
+	Slider(p, "Font size", 16, -302, 8, 24, 1, Getter("fontSize"), Setter("fontSize"))
+	Slider(p, "Max bars", 16, -328, 1, 20, 1, Getter("maxRows"), Setter("maxRows"), nil,
 		"Extra bars wait hidden until a slot frees up.")
 
-	Section(p, "Mouse", -374)
-	Check(p, "Show tooltips and allow clicks (off = click-through)", 16, -400, Getter("mouse"), Setter("mouse"),
+	Section(p, "Mouse and minimap", -362)
+	Check(p, "Show tooltips and allow clicks (off = click-through)", 16, -388, Getter("mouse"), Setter("mouse"),
 		"Right-click a bar to dismiss it, Shift+Right-click to ignore that item.")
+	Check(p, "Show the Lootline button on the minimap", 16, -414,
+		function() return not db().minimap.hide end,
+		function(v)
+			db().minimap.hide = not v
+			ns.UpdateMinimapButton()
+		end, "Left-click: the farm window. Shift+Left-click: start / pause the farm counter. "
+			.. "Right-click: menu. Drag it around the minimap to move it.\n\n/lootline minimap also toggles it.")
 end
 
 local QUALITIES = {
@@ -331,8 +343,11 @@ local function BuildFilterPage(p)
 		"Any gold you gain: looting, quests, selling.")
 	Check(p, "Currencies", 16, -62, Getter("showCurrency"), Setter("showCurrency"))
 	Check(p, "Reputation", 16, -88, Getter("showRep"), Setter("showRep"))
-	Check(p, "Quest rewards and purchases", 16, -114, Getter("showPushed"), Setter("showPushed"))
-	Check(p, "Crafted items", 16, -140, Getter("showCreated"), Setter("showCreated"))
+	Check(p, "Quest rewards and purchases", 290, -36, Getter("showPushed"), Setter("showPushed"))
+	Check(p, "Crafted items", 290, -62, Getter("showCreated"), Setter("showCreated"))
+	Check(p, "Profession skill-ups", 290, -88, Getter("showSkills"), Setter("showSkills"),
+		"A bar when a profession goes up, e.g. Skinning +1  146 / 150. Cooking, First Aid and Fishing "
+		.. "count too; weapon skills and Defense do not.")
 
 	Section(p, "Item filters", -178)
 	Choice(p, "Minimum quality", 16, -206, QUALITIES, Getter("minQuality"), Setter("minQuality"),
@@ -359,6 +374,7 @@ local function BuildDurationsPage(p)
 		{ "rare", "|cff0070ddRare|r" }, { "epic", "|cffa335eeEpic|r" }, { "legendary", "|cffff8000Legendary|r" },
 		{ "artifact", "|cffe6cc80Artifact|r" }, { "heirloom", "|cff00ccffHeirloom|r" }, { "quest", "Quest items" },
 		{ "money", "|cffffff00Money|r" }, { "currency", "|cffe6cc80Currency|r" }, { "rep", "|cff00ccffReputation|r" },
+		{ "skill", "Profession skill-ups" },
 	}
 	for i, r in ipairs(rows) do
 		Slider(p, r[2], 16, -10 - i * 30, 0, 60, 1, DurGet(r[1]), DurSet(r[1]), Seconds, nil, true)
@@ -374,38 +390,90 @@ local function BuildPricesPage(p)
 		{ 1, "Off" }, { 2, "Unit price" }, { 3, "Stack price" },
 	}, Getter("showAH"), Setter("showAH"), "Needs Auctionator, after it has scanned the auction house.")
 	Check(p, "Show silver and copper", 16, -104, Getter("dispCopSilv"), Setter("dispCopSilv"))
+	Check(p, "Label each price (AH, vendor, stack)", 16, -130, Getter("priceLabels"), Setter("priceLabels"),
+		"Writes what each price is in front of it: AH (auction, one item), AH stack, vendor (one item) "
+		.. "and stack (vendor price of the whole stack).")
 
-	Section(p, "Highlight expensive loot", -142)
-	Check(p, "Animated glow around expensive bars", 16, -168, Getter("highlight"), Setter("highlight"),
+	Section(p, "Highlight expensive loot", -168)
+	Check(p, "Animated glow around expensive bars", 16, -194, Getter("highlight"), Setter("highlight"),
 		"Compares the price of ONE item (or the money total) with the thresholds below.")
 	local tiers = { "|cfff2f251Tier 1 (yellow)|r", "|cffff9900Tier 2 (orange)|r", "|cffff2020Tier 3 (red)|r" }
 	for i = 1, 3 do
-		MoneyBox(p, tiers[i], 16, -174 - i * 32,
+		MoneyBox(p, tiers[i], 16, -200 - i * 32,
 			function() return db().thresholds[i] end,
 			function(v) db().thresholds[i] = v end,
 			"Price of one item (vendor or auction) from which the bar glows in this colour. Press Enter to apply.")
 	end
-	Check(p, "Play a sound for tier 3 (Wilhelm scream)", 16, -310, Getter("sound"), Setter("sound"))
+	Check(p, "Play a sound for tier 3 (Wilhelm scream)", 16, -336, Getter("sound"), Setter("sound"))
 end
 
 local function BuildLootingPage(p)
 	Section(p, "Faster auto loot", -10)
 	Check(p, "Take all loot at once, without the loot window", 16, -36, Getter("fastLoot"), function(v)
 		db().fastLoot = v
-		if not v then ns.RestoreLootFrame() end
+		ns.ApplyFastLoot()
 	end, "Right-click a corpse and everything goes straight into your bags. "
 		.. "The game's own Auto Loot setting does not have to be on.")
 	local notes = Label(p, "Hold your Auto Loot key (Shift by default) while looting to get the loot window as usual.\n\n"
 		.. "The window still opens whenever the game needs you: Bind on Pickup items, group rolls, "
-		.. "master loot, locked slots or no free bag space.\n\n"
-		.. "If something cannot be taken after all, Lootline tells you what was left, and looting "
-		.. "that corpse again opens the window.", 46, -66, "GameFontHighlightSmall")
+		.. "master loot or locked slots. If something cannot be taken after all (full bags), "
+		.. "the window opens with what is left.\n\n"
+		.. "/lootline debug prints why the window opened.", 46, -66, "GameFontHighlightSmall")
 	notes:SetWidth(500)
 	notes:SetWordWrap(true)
 	notes:SetSpacing(3)
+
+	Section(p, "Bag space", -186)
+	Check(p, "Warn when the bags are almost full", 16, -212, Getter("bagWarn"), Setter("bagWarn"),
+		"A chat message each time a looted item leaves this many free slots or fewer in your normal bags "
+		.. "(profession bags and quivers are not counted).")
+	Slider(p, "Warn at free slots", 16, -246, 0, 20, 1, Getter("bagWarnAt"), Setter("bagWarnAt"),
+		function(v) return v == 0 and "only when full" or (v .. " or fewer") end, nil, true)
 end
 
-local KIND_LABEL = { item = "Item", cur = "Currency", rep = "Reputation" }
+local function BuildFarmPage(p)
+	Section(p, "Farm window", -10)
+	Choice(p, "Window style", 16, -38, { { "classic", "Classic" }, { "modern", "Modern" }, { "minimal", "Minimal" } },
+		Getter("farmWindowStyle"), function(v)
+			db().farmWindowStyle = v
+			ns.ApplyFarmWindowStyle()
+		end, "Classic: the old dialog frame with its gold border and header. Modern: the metal frame of "
+			.. "today's game windows. Minimal: a flat dark panel. The minimap button is under Layout.")
+
+	Section(p, "Farm counter", -74)
+	local note = Label(p, "Counts what you loot while it runs: money (and your share in a group) and items. "
+		.. "Items count at the vendor price, or the Auctionator price when that is higher (grey items: vendor). "
+		.. "Kept per character across /reload and logout; time logged out does not count.",
+		16, -98, "GameFontHighlightSmall")
+	note:SetWidth(540)
+	note:SetWordWrap(true)
+	note:SetSpacing(2)
+
+	local open = Button(p, "Farm window", 120, 24)
+	open:SetPoint("TOPLEFT", 16, -154)
+	open:SetScript("OnClick", function() ns.ToggleFarmWindow() end)
+	Tooltip(open, "Farm window", "Time, money, item values, gold per hour and the best items. /lootline farm opens it too.")
+	local toggle = Button(p, "Start", 100, 24)
+	toggle:SetPoint("LEFT", open, "RIGHT", 8, 0)
+	toggle:SetScript("OnClick", function() ns.FarmToggle() end)
+	local reset = Button(p, "Reset", 100, 24)
+	reset:SetPoint("LEFT", toggle, "RIGHT", 8, 0)
+	reset:SetScript("OnClick", function() ns.FarmReset() end)
+	local state = Label(p, "", 16, -192)
+
+	local view = {}
+	view.Refresh = function()
+		if not ns.FarmState then return end
+		toggle:SetText(ns.FarmToggleText())
+		state:SetText("Counter: " .. ns.FarmState())
+	end
+	ns.RefreshFarmPage = function()
+		if p:IsVisible() then view.Refresh() end
+	end
+	Register(view)
+end
+
+local KIND_LABEL = { item = "Item", cur = "Currency", rep = "Reputation", skill = "Profession" }
 
 local function IgnoredEntries()
 	local list = {}
@@ -517,6 +585,7 @@ local PAGES = {
 	{ "Prices", BuildPricesPage },
 	{ "Ignored", BuildIgnorePage },
 	{ "Looting", BuildLootingPage },
+	{ "Farm", BuildFarmPage },
 }
 
 local function RefreshAll()
@@ -548,8 +617,8 @@ local function BuildUI()
 
 	ui.tabs, ui.pages = {}, {}
 	for i, def in ipairs(PAGES) do
-		local tab = Button(ui, def[1], 90, 24)
-		tab:SetPoint("TOPLEFT", 16 + (i - 1) * 96, -44)
+		local tab = Button(ui, def[1], 78, 24)
+		tab:SetPoint("TOPLEFT", 16 + (i - 1) * 82, -44)
 		tab:SetScript("OnClick", function() SelectPage(i) end)
 		ui.tabs[i] = tab
 		local page = CreateFrame("Frame", nil, ui)
@@ -583,6 +652,13 @@ end
 
 local moving -- "Move bars" is closing the Options window on purpose
 local reopenAfterMove
+local wantPage -- tab to show when the options open next (e.g. "Farm" from the minimap button)
+
+local function SelectPageByName(name)
+	for i, def in ipairs(PAGES) do
+		if def[1] == name then SelectPage(i) return end
+	end
+end
 
 -- Puts the controls into `host` (the Settings page or the combat window).
 local function Attach(host)
@@ -592,6 +668,10 @@ local function Attach(host)
 	ui:ClearAllPoints()
 	ui:SetAllPoints(host)
 	ui:Show()
+	if wantPage then
+		SelectPageByName(wantPage)
+		wantPage = nil
+	end
 	RefreshAll()
 end
 
@@ -660,7 +740,14 @@ local function BuildCombatWindow()
 end
 
 -- /lootline: opens the Lootline page in Esc > Options > AddOns, or closes it when it is open.
-function ns.OpenOptions()
+-- With a tab name: opens on that tab (switches to it when the page is already open).
+function ns.OpenOptions(pageName)
+	if pageName and ui and ui:IsVisible() then
+		SelectPageByName(pageName)
+		RefreshAll()
+		return
+	end
+	wantPage = pageName
 	local category = ns.settingsCategory
 	if InCombatLockdown() or not (category and Settings and Settings.OpenToCategory) then
 		if panel and panel:IsVisible() then return end -- already on screen in the Options window

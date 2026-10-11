@@ -16,6 +16,7 @@ LootlineDB = {
 	grow = "up",
 	thresholds = { 5, 50.5, 500 },
 	minValue = 0,
+	durations = { rep = 20, skill = 8 },
 	blacklist = {},
 }
 __fire("ADDON_LOADED", "Lootline")
@@ -25,6 +26,7 @@ check(db.width == 380 and db.grow == "up", "chosen width / grow kept")
 check(db.thresholds[1] == 50000 and db.thresholds[2] == 505000 and db.thresholds[3] == 5000000,
 	"chosen tiers converted to copper (5g / 50g 50s / 500g)")
 check(db.minValue == 0, "value filter still off")
+check(db.durations.rep == 20 and db.durations.skill == 8, "chosen reputation / profession durations kept")
 local p = LootlineAnchor.__points[1]
 check(p and p[1] == "CENTER" and p[4] == 450 and p[5] == -120, "bars placed at the saved position")
 print(("RESULT: %d failure(s)"):format(failures))

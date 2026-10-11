@@ -141,7 +141,7 @@ check(cloth and near(cloth.alpha, 1) and near(cloth.x, 0), "merge does not repla
 check(#rows() == 5, "merge adds no bar")
 
 -- 5. expiry: common lasts 5s; slide out to -50 over 0.25s keeping its slot, then others glide
--- poor 3 / common 5 / uncommon 10 / rare 15 / epic 20 / money 5 / rep 15 / currency 15
+-- poor 3 / common 5 / uncommon 10 / rare 15 / epic 20 / money 5 / rep 5 / currency 15
 __tick(0.1, 49) -- ~4.9s after the merge
 cloth = find("Linen Cloth")
 check(cloth and near(cloth.alpha, 1), "still fully visible before its duration ends (no early fade)")
@@ -155,7 +155,7 @@ check(cloth == nil or near(cloth.y, clothY), "keeps its slot while leaving")
 __tick(0.05, 4)
 check(find("Linen Cloth") == nil, "gone after the 0.25s exit")
 __tick(0.1, 3)
-check(#rows() == 3, "money (5s) left too; 3 bars remain")
+check(#rows() == 2 and find("Krol Blade") and find("Timewarped Badge"), "money and rep (5s) left too; the blade and the currency remain")
 
 -- 6. row limit: 10 shown, the rest wait hidden (highest prio = top ones hidden)
 SlashCmdList.LOOTLINE("clear")

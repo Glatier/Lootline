@@ -28,7 +28,7 @@ end
 -- Settings
 ---------------------------------------------------------------------------
 
-local DB_VERSION = 3
+local DB_VERSION = 4
 
 -- Defaults mostly follow the WeakAura's exported settings.
 local DEFAULTS = {
@@ -51,20 +51,26 @@ local DEFAULTS = {
 	showRep = true,
 	showPushed = true, -- quest rewards, purchases ("You receive item: ...")
 	showCreated = true, -- crafted items ("You create: ...")
+	showSkills = false, -- a bar when a profession (or cooking, first aid, fishing) skill goes up
 	showAH = 1, -- 1 off, 2 unit AH price, 3 stack AH price
 	showJunkAH = true,
 	showStackPrice = 1, -- 1 unit + stack total, 2 unit only, 3 stack total only
+	priceLabels = false, -- "AH" / "vendor" / "stack" in front of each price
 	dispCopSilv = true,
 	invCount = true,
 	showItemLevel = false, -- "ilvl: N" under gear (Classic tooltips do not show it either)
 	fastLoot = false, -- take all loot at once without the loot window (see Faster auto loot)
+	bagWarn = true, -- a chat message when the bags are almost full
+	bagWarnAt = 5, -- free slots (normal bags) at which the warning starts
+	minimap = { hide = false, angle = 225 }, -- minimap button (farm counter); angle in degrees
+	farmWindowStyle = "classic", -- farm window: "classic" (old dialog frame), "modern" (metal frame) or "minimal"
 	maxLength = 35,
 	highlight = true,
 	thresholds = { 10000, 50000, 100000 }, -- copper (1g / 5g / 10g), compared with the per-unit price
 	sound = false,
 	durations = {
 		poor = 3, common = 5, uncommon = 10, rare = 15, epic = 20, legendary = 40,
-		artifact = 15, heirloom = 15, quest = 15, money = 5, rep = 15, currency = 15,
+		artifact = 15, heirloom = 15, quest = 15, money = 5, rep = 5, currency = 15, skill = 5,
 	},
 	blacklist = {},
 }
@@ -802,6 +808,30 @@ local function GetAHPrice(link)
 	end
 end
 
+-- After an Auctionator scan the item bars on screen (and the farm counter) show the new prices.
+-- Auctionator reports every processed batch of a scan: one refresh per burst is enough.
+local ahHooked, ahRefreshPending = false, false
+
+local function OnAuctionatorUpdate()
+	if ahRefreshPending then return end
+	ahRefreshPending = true
+	C_Timer.After(0.5, function()
+		ahRefreshPending = false
+		for _, e in ipairs(active) do
+			if e.kind == "item" then Rebuild(e, true) end
+		end
+		if ns.OnPricesChanged then ns.OnPricesChanged() end
+	end)
+end
+
+local function HookAuctionator()
+	if ahHooked then return end
+	local api = Auctionator and Auctionator.API and Auctionator.API.v1
+	if api and api.RegisterForDBUpdate then
+		ahHooked = pcall(api.RegisterForDBUpdate, ADDON_NAME, OnAuctionatorUpdate)
+	end
+end
+
 local function IsGear(classID, equipLoc)
 	return (classID == 2 or classID == 4) and equipLoc ~= nil and equipLoc ~= "" and equipLoc ~= "INVTYPE_NON_EQUIP_IGNORE"
 end
@@ -864,16 +894,19 @@ local function BuildItem(e)
 		.. (e.gearLine and ("\n" .. e.gearLine) or "")
 
 	local price = ""
-	local function add(s)
-		if s and s ~= "" then price = price .. (price ~= "" and "\n" or "") .. s end
+	local function add(s, label)
+		if not s or s == "" then return end
+		if db.priceLabels then s = "|cff9d9d9d" .. label .. "|r  " .. s end
+		price = price .. (price ~= "" and "\n" or "") .. s
 	end
 	e.ah = nil
 	if db.showAH ~= 1 and e.link and (db.showJunkAH or e.rarity > 0) then
 		e.ah = GetAHPrice(e.link)
-		if e.ah then add(FormatPrice((db.showAH == 3 and e.count > 1) and e.ah * e.count or e.ah)) end
+		local stack = db.showAH == 3 and e.count > 1
+		if e.ah then add(FormatPrice(stack and e.ah * e.count or e.ah), stack and "AH stack" or "AH") end
 	end
-	if db.showStackPrice ~= 3 or e.count == 1 then add(FormatPrice(e.sellPrice)) end
-	if e.count > 1 and e.sellPrice > 0 and db.showStackPrice ~= 2 then add(FormatPrice(e.count * e.sellPrice)) end
+	if db.showStackPrice ~= 3 or e.count == 1 then add(FormatPrice(e.sellPrice), "vendor") end
+	if e.count > 1 and e.sellPrice > 0 and db.showStackPrice ~= 2 then add(FormatPrice(e.count * e.sellPrice), "stack") end
 	e.right = price
 	e.tier = TierFor(e.sellPrice, e.rarity > 0 and e.ah or nil)
 end
@@ -998,6 +1031,120 @@ local function OnMoneyChanged()
 	else
 		Push({ kind = "money", key = "money", prio = -1, total = total, plain = MONEY or "Money",
 			duration = db.durations.money, build = BuildMoney })
+	end
+end
+
+---------------------------------------------------------------------------
+-- Bag space warning: a chat message each time the free slots of the normal bags drop to the
+-- warning level or below (profession bags and quivers do not count: loot rarely fits there)
+---------------------------------------------------------------------------
+
+local lastFree
+
+local function FreeBagSlots()
+	if not (C_Container and C_Container.GetContainerNumFreeSlots) then return nil end
+	local free = 0
+	for bag = 0, NUM_BAG_SLOTS or 4 do
+		local n, family = C_Container.GetContainerNumFreeSlots(bag)
+		if type(n) == "number" and (family == 0 or family == nil) then free = free + n end
+	end
+	return free
+end
+
+-- warns when the bags got fuller; the first reading after login is only remembered
+local function CheckBags()
+	local free = FreeBagSlots()
+	if not free then return end
+	local before = lastFree
+	lastFree = free
+	if not db.bagWarn or not before or free >= before or free > db.bagWarnAt then return end
+	if free == 0 then
+		Print("|cffff3030Bags full!|r")
+	else
+		Print("|cffff9050Bags almost full:|r " .. free .. (free == 1 and " free slot left" or " free slots left"))
+	end
+end
+
+---------------------------------------------------------------------------
+-- Profession skill-ups: the skill lines are compared after each SKILL_LINES_CHANGED, so no chat
+-- text has to be read. Only professions and secondary skills (cooking, first aid, fishing):
+-- weapon skills and defense go up every few swings.
+---------------------------------------------------------------------------
+
+local SKILL_CATEGORIES = { [9] = true, [11] = true } -- SkillLineCategory: Secondary Skills, Professions
+local SKILL_ICONS = {
+	[129] = "Spell_Holy_SealOfSacrifice", [164] = "Trade_BlackSmithing", [165] = "Trade_LeatherWorking",
+	[171] = "Trade_Alchemy", [182] = "Trade_Herbalism", [185] = "INV_Misc_Food_15", [186] = "Trade_Mining",
+	[197] = "Trade_Tailoring", [202] = "Trade_Engineering", [333] = "Trade_Engraving",
+	[356] = "Trade_Fishing", [393] = "INV_Misc_Pelt_Wolf_01", [755] = "INV_Misc_Gem_01",
+	[773] = "INV_Inscription_Tradeskill01",
+}
+local skillRanks -- skillID -> rank at the last look
+
+local function BuildSkill(e)
+	e.left = "|cffffffff" .. Truncate(e.plain, db.maxLength) .. "|r  |cff33ff33+" .. e.gain .. "|r"
+	e.right = "|cffffffff" .. e.rank .. (e.maxRank > 0 and (" / " .. e.maxRank) or "") .. "|r"
+	e.tier = nil
+end
+
+local function AddSkill(info, gain)
+	local key = "skill:" .. info.skillID
+	if db.blacklist[key] then return end
+	local icon = SKILL_ICONS[info.skillID] or SKILL_ICONS[info.parentSkillLineID or 0]
+	Push({ kind = "skill", key = key, plain = info.name, rank = info.rank, maxRank = info.maxRank or 0,
+		gain = gain, icon = icon and ("Interface\\Icons\\" .. icon) or ICON_UNKNOWN, prio = 8,
+		duration = db.durations.skill, build = BuildSkill,
+		merge = function(self, other)
+			self.gain = self.gain + other.gain
+			self.rank, self.maxRank = other.rank, other.maxRank
+		end })
+end
+
+local function CheckSkills()
+	local api = C_SkillInfo
+	if not (api and api.GetNumSkillLines and api.GetSkillLineInfo) then return end
+	local now = {}
+	for i = 1, api.GetNumSkillLines() do
+		local info = api.GetSkillLineInfo(i)
+		if info and not info.isHeader and SKILL_CATEGORIES[info.skillLineCategoryID] then now[info.skillID] = info end
+	end
+	-- skills under a collapsed header are not listed: ask for the ones seen before by ID
+	if skillRanks and api.GetSkillLineInfoByID then
+		for id in pairs(skillRanks) do
+			if not now[id] then now[id] = api.GetSkillLineInfoByID(id) end
+		end
+	end
+	-- A profession can come as its main line plus a child line of the same name (parentSkillLineID
+	-- = the main line), both going up together: keep one line per profession. The main line wins,
+	-- then a line whose icon is known, then the lower ID.
+	local function better(a, b)
+		local aMain, bMain = (a.parentSkillLineID or 0) == 0, (b.parentSkillLineID or 0) == 0
+		if aMain ~= bMain then return aMain end
+		local aIcon, bIcon = SKILL_ICONS[a.skillID] ~= nil, SKILL_ICONS[b.skillID] ~= nil
+		if aIcon ~= bIcon then return aIcon end
+		return a.skillID < b.skillID
+	end
+	local byName = {}
+	for id, info in pairs(now) do
+		local parent = info.parentSkillLineID
+		if parent and parent ~= 0 and parent ~= id and now[parent] then
+			now[id] = nil -- a child line of a profession that is listed itself
+		elseif type(info.name) == "string" and not IsSecret(info.name) then
+			local other = byName[info.name]
+			if not other or better(info, other) then byName[info.name] = info end
+		end
+	end
+	for id, info in pairs(now) do
+		if type(info.name) == "string" and not IsSecret(info.name) and byName[info.name] ~= info then now[id] = nil end
+	end
+	local before = skillRanks
+	skillRanks = {}
+	for id, info in pairs(now) do
+		if type(info.rank) == "number" and not IsSecret(info.rank) then
+			skillRanks[id] = info.rank
+			local old = before and before[id]
+			if db.showSkills and old and info.rank > old then AddSkill(info, info.rank - old) end
+		end
 	end
 end
 
@@ -1148,6 +1295,7 @@ end
 ---------------------------------------------------------------------------
 
 local LOOT_PATTERNS, REP_PATTERNS, CURRENCY_PATTERNS = {}, {}, {}
+local MONEY_PATTERNS, COIN_PATTERNS = {}, {}
 
 local function AddPatterns(list, names, anchored, extra)
 	for _, name in ipairs(names) do
@@ -1190,6 +1338,29 @@ local function BuildPatterns()
 		"CURRENCY_GAINED_MULTIPLE",
 		"CURRENCY_GAINED",
 	}, true)
+
+	-- money you looted yourself or your share of a group member's loot (the guild variants first)
+	AddPatterns(MONEY_PATTERNS, {
+		"YOU_LOOT_MONEY_GUILD", "YOU_LOOT_MONEY",
+		"LOOT_MONEY_SPLIT_GUILD", "LOOT_MONEY_SPLIT_MOD", "LOOT_MONEY_SPLIT",
+	}, true)
+	for name, copper in pairs({ GOLD_AMOUNT = 10000, SILVER_AMOUNT = 100, COPPER_AMOUNT = 1 }) do
+		local p = ToPattern(_G[name])
+		if p then
+			p.copper = copper
+			COIN_PATTERNS[#COIN_PATTERNS + 1] = p
+		end
+	end
+end
+
+-- "1 Gold, 20 Silver, 5 Copper" -> 12005
+local function ParseCoins(text)
+	local copper = 0
+	for _, p in ipairs(COIN_PATTERNS) do
+		local r = Match(text, p)
+		if r and tonumber(r[1]) then copper = copper + tonumber(r[1]) * p.copper end
+	end
+	return copper
 end
 
 ---------------------------------------------------------------------------
@@ -1219,6 +1390,7 @@ end
 local function NotifyLoot(link, quantity, fromChat)
 	if link and link:find("|Hitem:") and ClaimLoot(link, quantity, fromChat) then
 		AddItem(link, quantity)
+		if ns.OnLootedItem then ns.OnLootedItem(link, quantity) end -- farm counter
 	end
 end
 
@@ -1239,14 +1411,21 @@ local function CaptureLootWindow()
 end
 
 ---------------------------------------------------------------------------
--- Faster auto loot: when every slot can simply be taken, take them all at once and keep the
--- game's loot window from opening for that loot. The window's own LOOT_OPENED event is switched
--- off for that one loot only (a plain widget call, so none of Blizzard's loot window code runs
--- from here). Anything that needs the player - Bind on Pickup, rolls, master loot, locked slots,
--- full bags, items the client has not loaded - leaves the loot to the normal window.
+-- Faster auto loot: when every slot can simply be taken, take them all at once without the
+-- game's loot window. While the option is on, the window's own LOOT_OPENED event stays switched
+-- off, so the window cannot open by itself whatever order the client sends LOOT_READY and
+-- LOOT_OPENED in. When the player is needed - Bind on Pickup, rolls, master loot, locked slots,
+-- the Auto Loot key held, or a slot that could not be taken (full bags) - Lootline hands the loot
+-- to the window by running the window's own LOOT_OPENED handler, exactly as the client would.
 ---------------------------------------------------------------------------
 
-local FL = { owned = false, session = 0, lastClear = 0, failed = false, src = nil, skipSrc = nil, skipUntil = 0 }
+local FL = {
+	owned = false, -- Lootline switched the window's LOOT_OPENED off
+	session = 0, -- bumped whenever a loot ends or is handed to the window: stops pending timers
+	opened = false, autoLoot = false, fromItem = false, -- this loot's LOOT_OPENED and its payload
+	decided = false, waiting = false, tries = 0, taking = false, failed = false, lastClear = 0,
+	debug = false,
+}
 
 -- loot errors that mean a slot stays on the corpse
 local LOOT_ERRORS = {}
@@ -1255,125 +1434,191 @@ for _, name in ipairs({ "ERR_INV_FULL", "ERR_ITEM_MAX_COUNT", "ERR_LOOT_ROLL_PEN
 	if type(_G[name]) == "string" then LOOT_ERRORS[_G[name]] = true end
 end
 
--- only undoes what Lootline did
-local function RestoreLootFrame()
-	if not FL.owned then return end
-	FL.owned = false
-	if LootFrame and LootFrame.IsEventRegistered and not LootFrame:IsEventRegistered("LOOT_OPENED") then
-		LootFrame:RegisterEvent("LOOT_OPENED")
+local function Debug(msg)
+	if FL.debug then print("|cff33ff99Lootline|r |cff999999loot:|r " .. msg) end
+end
+
+-- the window's LOOT_OPENED follows the option; only undoes what Lootline did
+local function ClaimLootFrame()
+	local frame = LootFrame
+	if not (frame and frame.IsEventRegistered) then return end
+	if db.fastLoot then
+		if frame:IsEventRegistered("LOOT_OPENED") then
+			frame:UnregisterEvent("LOOT_OPENED")
+			FL.owned = true
+		end
+	elseif FL.owned then
+		FL.owned = false
+		if not frame:IsEventRegistered("LOOT_OPENED") then frame:RegisterEvent("LOOT_OPENED") end
 	end
 end
 
-local function FreeBagSlots()
-	if not (C_Container and C_Container.GetContainerNumFreeSlots) then return nil end
-	local free = 0
-	for bag = 0, NUM_BAG_SLOTS or 4 do
-		local n, family = C_Container.GetContainerNumFreeSlots(bag)
-		if type(n) == "number" and (family == 0 or family == nil) then free = free + n end
+local function LootLeft()
+	for slot = 1, GetNumLootItems() do
+		if LootSlotHasItem(slot) then return true end
 	end
-	return free
+	return false
 end
 
--- "money" / "item" when the slot can be taken without asking the player, nil otherwise
+-- Opens the game's loot window for the current loot. Without this loot's LOOT_OPENED yet, the
+-- window opens when it arrives (it carries the payload the window wants).
+local function ShowLootWindow(why)
+	FL.decided, FL.taking, FL.waiting = true, false, false
+	FL.session = FL.session + 1
+	local frame = LootFrame
+	if not FL.owned or not frame or frame:IsShown() then return end -- not ours to open, or already open
+	if not FL.opened then
+		if not FL.wantWindow then Debug("loot window: " .. why) end
+		FL.wantWindow = true
+		local session = FL.session
+		C_Timer.After(0.2, function() -- in case this loot's LOOT_OPENED never comes
+			if session == FL.session and FL.wantWindow and lootSessionOpen then
+				FL.opened = true
+				ShowLootWindow(why)
+			end
+		end)
+		return
+	end
+	if not FL.wantWindow then Debug("loot window: " .. why) end
+	FL.wantWindow = false
+	local onEvent = frame.GetScript and frame:GetScript("OnEvent")
+	if onEvent then onEvent(frame, "LOOT_OPENED", FL.autoLoot, FL.fromItem) end
+end
+
+local function SlotText(slot)
+	local link = GetLootSlotLink(slot)
+	return (link and not IsSecret(link)) and link or ("slot " .. slot)
+end
+
+-- "money" / "item" / "empty" when the slot can be taken without asking the player, "wait" while
+-- its item data is still loading, otherwise nil and the reason
 local function SlotKind(slot, inGroup)
 	local slotType = GetLootSlotType and GetLootSlotType(slot)
-	if slotType == nil or IsSecret(slotType) then return nil end
+	if slotType == nil or IsSecret(slotType) then return nil, "unknown slot type" end
 	local LST = Enum and Enum.LootSlotType or { None = 0, Item = 1, Money = 2, Currency = 3 }
 	if slotType == LST.None then return "empty" end
 	local _, _, _, _, quality, locked = GetLootSlotInfo(slot)
-	if IsSecret(locked) or IsSecret(quality) or locked then return nil end -- roll, master loot, not yours
+	if IsSecret(locked) or IsSecret(quality) or locked then return nil, "locked (roll / master loot): " .. SlotText(slot) end
 	if slotType == LST.Money or slotType == LST.Currency then return "money" end
-	if inGroup and GetLootThreshold and (quality or 0) >= GetLootThreshold() then return nil end
+	if inGroup and GetLootThreshold and (quality or 0) >= GetLootThreshold() then
+		return nil, "group loot threshold: " .. SlotText(slot)
+	end
 	local link = GetLootSlotLink(slot)
-	if not link or IsSecret(link) then return nil end
+	if IsSecret(link) then return nil, "item hidden by the game" end
+	if not link then return "wait", "slot " .. slot .. " has no item link yet" end
 	local bindType = select(14, GetItemInfo(link))
-	if bindType == nil or bindType == 1 then return nil end -- not loaded yet, or Bind on Pickup: the game asks first
+	if bindType == nil then
+		if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, link) end
+		return "wait", "item not loaded yet: " .. link
+	end
+	if bindType == 1 then return nil, "Bind on Pickup: " .. link end -- the game asks first
 	return "item"
 end
 
-local function LeftBehind()
-	local left = {}
-	for slot = 1, GetNumLootItems() do
-		if LootSlotHasItem(slot) then
-			local link = GetLootSlotLink(slot)
-			if link and not IsSecret(link) then left[#left + 1] = link end
-		end
+-- "take", "empty", "wait" or "window" (+ reason) for the loot as it is now
+local function Evaluate()
+	if IsModifiedClick("AUTOLOOTTOGGLE") then return "window", "Auto Loot key held" end
+	local n = GetNumLootItems()
+	if not n or IsSecret(n) then return "window", "loot hidden by the game" end
+	if n == 0 then return "empty" end
+	local inGroup = IsInGroup and IsInGroup()
+	local waitWhy
+	for slot = 1, n do
+		local kind, why = SlotKind(slot, inGroup)
+		if not kind then return "window", why end
+		if kind == "wait" then waitWhy = waitWhy or why end
 	end
-	RestoreLootFrame()
-	FL.skipSrc, FL.skipUntil = FL.src, GetTime() + 30 -- next loot of this corpse opens the window
-	CloseLoot()
-	Print("could not take everything" .. (#left > 0 and (": " .. table.concat(left, ", ")) or "")
-		.. ". Loot again to open the loot window.")
+	if waitWhy then return "wait", waitWhy end
+	return "take"
 end
 
--- The client closes the loot by itself once it is empty; this only steps in when it does not.
+-- The client closes the loot by itself once it is empty; this only steps in when it does not,
+-- and hands what could not be taken to the window.
 local function Watch(session)
 	C_Timer.After(0.5, function()
-		if session ~= FL.session or not FL.owned then return end
-		local left = false
-		for slot = 1, GetNumLootItems() do
-			if LootSlotHasItem(slot) then left = true break end
-		end
+		if session ~= FL.session then return end
 		local idle = GetTime() - FL.lastClear
-		if not left then
+		if not LootLeft() then
 			if idle > 2 then CloseLoot() else Watch(session) end
 		elseif idle > (FL.failed and 0.4 or 1.5) then
-			LeftBehind()
+			local left = {}
+			for slot = 1, GetNumLootItems() do
+				if LootSlotHasItem(slot) then left[#left + 1] = SlotText(slot) end
+			end
+			ShowLootWindow("could not take " .. table.concat(left, ", "))
 		else
 			Watch(session)
 		end
 	end)
 end
 
--- keeps the game's loot window shut for this loot (unless it is already open)
-local function HideLootWindow()
-	local frame = LootFrame
-	if frame and frame.IsEventRegistered and frame:IsEventRegistered("LOOT_OPENED") and not frame:IsShown() then
-		frame:UnregisterEvent("LOOT_OPENED")
-		FL.owned = true
-	end
-end
-
--- first LOOT_READY of a loot
-local function FastLoot()
-	FL.session = FL.session + 1
-	FL.failed, FL.lastClear = false, GetTime()
-	local src = GetLootSourceInfo and GetLootSourceInfo(1)
-	FL.src = (src and not IsSecret(src)) and src or nil
-	if not db.fastLoot or IsModifiedClick("AUTOLOOTTOGGLE") then return end -- Shift: the usual window
-	local n = GetNumLootItems()
-	if not n or IsSecret(n) then return end
-	if n == 0 then
-		-- An empty loot ("There is no loot."): the corpse was clicked again before the client saw
-		-- it emptied, which fast looting makes easy. No empty window; end the loot right away.
-		HideLootWindow()
+local function Decide()
+	if FL.decided or FL.waiting then return end
+	local status, why = Evaluate()
+	if status == "wait" and FL.tries < 10 then -- up to a second for item data to arrive
+		FL.tries, FL.waiting = FL.tries + 1, true
+		Debug("waiting: " .. why)
 		local session = FL.session
-		C_Timer.After(0, function()
-			if session == FL.session then CloseLoot() end
+		C_Timer.After(0.1, function()
+			if session ~= FL.session then return end
+			FL.waiting = false
+			Decide()
 		end)
 		return
 	end
-	if GetTime() < FL.skipUntil and (FL.skipSrc == nil or FL.skipSrc == FL.src) then
-		FL.skipSrc, FL.skipUntil = nil, 0
+	if status == "wait" or status == "window" then
+		ShowLootWindow(why)
 		return
 	end
-	local inGroup = IsInGroup and IsInGroup()
-	local items = 0
-	for slot = 1, n do
-		local kind = SlotKind(slot, inGroup)
-		if not kind then return end
-		if kind == "item" then items = items + 1 end
+	FL.decided = true
+	local session = FL.session
+	if status == "empty" then
+		-- An empty loot ("There is no loot."): the corpse was clicked again before the client saw
+		-- it emptied, which fast looting makes easy. No empty window; end the loot right away.
+		Debug("empty loot: closed")
+		C_Timer.After(0, function()
+			if session == FL.session and GetNumLootItems() == 0 then CloseLoot() end
+		end)
+		return
 	end
-	if items > 0 and FreeBagSlots() == 0 then return end
-	HideLootWindow()
+	local n = GetNumLootItems()
+	Debug("taking " .. n .. " slot(s)")
 	if FL.owned and IsFishingLoot and IsFishingLoot() and SOUNDKIT and SOUNDKIT.FISHING_REEL_IN then
 		PlaySound(SOUNDKIT.FISHING_REEL_IN) -- the hidden window would have played it
 	end
+	FL.taking, FL.failed, FL.lastClear = true, false, GetTime()
 	for slot = n, 1, -1 do LootSlot(slot) end
-	if FL.owned then Watch(FL.session) end
+	if FL.owned then Watch(session) end
 end
 
-ns.RestoreLootFrame = RestoreLootFrame
+local function EndLoot()
+	FL.session = FL.session + 1
+	FL.opened, FL.decided, FL.waiting, FL.taking, FL.wantWindow = false, false, false, false, false
+	FL.tries, FL.failed = 0, false
+end
+
+-- LOOT_READY or LOOT_OPENED, whichever comes first (LOOT_READY can repeat within one loot)
+local function OnLootEvent(isOpened, autoLoot, fromItem)
+	if isOpened then
+		if FL.opened then EndLoot() end -- a second LOOT_OPENED without LOOT_CLOSED: a new loot
+		FL.opened, FL.autoLoot, FL.fromItem = true, autoLoot and true or false, fromItem and true or false
+	end
+	if not db.fastLoot then return end
+	ClaimLootFrame() -- picks the event up again if something gave it back to the window
+	if FL.wantWindow then
+		ShowLootWindow("as decided")
+	else
+		Decide()
+	end
+end
+
+-- the option was switched: a loot hidden right now goes to the window
+local function ApplyFastLoot()
+	if not db.fastLoot and lootSessionOpen and LootLeft() then ShowLootWindow("faster auto loot turned off") end
+	ClaimLootFrame()
+end
+
+ns.ApplyFastLoot = ApplyFastLoot
 
 local H = {}
 
@@ -1396,14 +1641,21 @@ function H.CHAT_MSG_LOOT(msg, _, _, _, _, _, _, _, _, _, _, guid)
 	end
 end
 
-function H.LOOT_READY()
+-- a loot starts with LOOT_READY or LOOT_OPENED, whichever the client sends first
+local function StartLootEvent()
 	local newLoot = not lootSessionOpen
 	CaptureLootWindow() -- always before any LootSlot
-	if newLoot then FastLoot() end -- LOOT_READY can repeat within one loot: decide once
+	if newLoot then EndLoot() end -- clean state, even if the last LOOT_CLOSED went missing
 end
 
-function H.LOOT_OPENED()
-	CaptureLootWindow()
+function H.LOOT_READY(autoLoot)
+	StartLootEvent()
+	OnLootEvent(false, autoLoot)
+end
+
+function H.LOOT_OPENED(autoLoot, fromItem)
+	StartLootEvent()
+	OnLootEvent(true, autoLoot, fromItem)
 end
 
 function H.LOOT_SLOT_CLEARED(slot)
@@ -1422,8 +1674,7 @@ function H.LOOT_SLOT_CLEARED(slot)
 end
 
 function H.LOOT_CLOSED()
-	RestoreLootFrame()
-	FL.session = FL.session + 1 -- stops a pending Watch
+	EndLoot() -- stops a pending Watch
 	lootSessionOpen = false
 	wipe(lootCapture)
 	local now = GetTime()
@@ -1442,11 +1693,34 @@ end
 
 function H.PLAYER_ENTERING_WORLD()
 	trackMoney = GetMoney()
-	RestoreLootFrame()
+	ClaimLootFrame()
+	HookAuctionator() -- every addon is loaded by now
+	CheckBags()
+	CheckSkills()
+end
+
+function H.BAG_UPDATE_DELAYED()
+	CheckBags()
+end
+
+function H.SKILL_LINES_CHANGED()
+	CheckSkills()
+end
+
+function H.CHAT_MSG_MONEY(msg)
+	if not ns.OnLootedMoney or IsSecret(msg) or type(msg) ~= "string" then return end
+	for _, p in ipairs(MONEY_PATTERNS) do
+		local r = Match(msg, p)
+		if r and r[1] then
+			local copper = ParseCoins(r[1])
+			if copper > 0 then ns.OnLootedMoney(copper) end
+			return
+		end
+	end
 end
 
 function H.UI_ERROR_MESSAGE(_, msg)
-	if FL.owned and type(msg) == "string" and not IsSecret(msg) and LOOT_ERRORS[msg] then
+	if FL.taking and type(msg) == "string" and not IsSecret(msg) and LOOT_ERRORS[msg] then
 		FL.failed = true -- Watch hands the rest over once nothing more arrives
 	end
 end
@@ -1563,6 +1837,9 @@ local function ResetDefaults()
 	wipe(db)
 	CopyDefaults(DEFAULTS, db)
 	db.blacklist = blacklist
+	ApplyFastLoot()
+	if ns.UpdateMinimapButton then ns.UpdateMinimapButton() end
+	if ns.ApplyFarmWindowStyle then ns.ApplyFarmWindowStyle() end
 	RebuildAll()
 end
 
@@ -1621,12 +1898,16 @@ ns.EnsurePreview = function()
 	if #active == 0 then RunTest() end
 end
 ns.IgnoreItem = IgnoreItem
+-- for Farm.lua
+ns.FormatPrice = FormatPrice
+ns.GetAHPrice = GetAHPrice
+ns.CheckBags = CheckBags
 
 ---------------------------------------------------------------------------
 -- Slash commands
 ---------------------------------------------------------------------------
 
-local DURATION_KEYS = "poor, common, uncommon, rare, epic, legendary, artifact, heirloom, quest, money, rep, currency"
+local DURATION_KEYS = "poor, common, uncommon, rare, epic, legendary, artifact, heirloom, quest, money, rep, currency, skill"
 
 local function Toggle(field, label)
 	db[field] = not db[field]
@@ -1648,6 +1929,10 @@ local function Help()
 	print("  money | currency | rep | pushed | created  - toggle sources")
 	print("  merge | highlight | sound | invcount | ilvl | coppersilver | mouse  - toggle options")
 	print("  fastloot  - Faster auto loot: everything at once, without the loot window")
+	print("  debug  - say why the loot window opened (Faster auto loot)")
+	print("  farm  - farm window  |  farm start|stop|reset  - the counter  |  minimap  - minimap button on/off")
+	print("  skills  - profession skill-up bars on/off  |  labels  - AH / vendor / stack labels on prices on/off")
+	print("  bagwarn  - bags-almost-full warning on/off  |  bagwarn <n>  - warn at n free slots or less")
 	print("  ah off|unit|stack  - auction price line (Auctionator)")
 	print("  stackprice both|unit|stack  - vendor price lines")
 	print("  threshold <m1> <m2> <m3>  - highlight thresholds (per unit)")
@@ -1763,7 +2048,26 @@ SlashCmdList.LOOTLINE = function(input)
 		RebuildAll()
 	elseif cmd == "fastloot" then
 		Toggle("fastLoot", "faster auto loot")
-		if not db.fastLoot then RestoreLootFrame() end
+		ApplyFastLoot()
+	elseif cmd == "farm" and ns.FarmCommand then
+		ns.FarmCommand(arg2)
+	elseif cmd == "minimap" then
+		db.minimap.hide = not db.minimap.hide
+		Print("minimap button: " .. (db.minimap.hide and "|cffff3333off|r" or "|cff33ff33on|r"))
+		if ns.UpdateMinimapButton then ns.UpdateMinimapButton() end
+	elseif cmd == "skills" then
+		Toggle("showSkills", "profession skill-ups")
+	elseif cmd == "labels" then
+		Toggle("priceLabels", "price labels")
+		RebuildAll()
+	elseif cmd == "bagwarn" and n and n >= 0 then
+		db.bagWarnAt = floor(n)
+		Print("bag warning at " .. db.bagWarnAt .. " free slots or less")
+	elseif cmd == "bagwarn" then
+		Toggle("bagWarn", "bags-almost-full warning")
+	elseif cmd == "debug" then
+		FL.debug = not FL.debug
+		Print("loot debug messages: " .. (FL.debug and "|cff33ff33on|r" or "|cffff3333off|r") .. " (until /reload)")
 	elseif cmd == "coppersilver" then
 		Toggle("dispCopSilv", "show copper/silver")
 		RebuildAll()
@@ -1841,6 +2145,14 @@ local function Migrate(saved)
 		end
 		saved.tsmSource = nil -- TradeSkillMaster support was dropped
 	end
+	if version < 4 then
+		-- reputation and profession bars stay 5 s now (were 15 / 10)
+		local d = saved.durations
+		if type(d) == "table" then
+			if d.rep == 15 then d.rep = nil end
+			if d.skill == 10 then d.skill = nil end
+		end
+	end
 	return saved
 end
 
@@ -1858,6 +2170,9 @@ events:SetScript("OnEvent", function(self, event, ...)
 		ApplyFonts()
 		ApplyPosition()
 		SetLocked(true)
+		ClaimLootFrame()
+		HookAuctionator()
+		if ns.InitFarm then ns.InitFarm() end
 		for ev in pairs(H) do pcall(self.RegisterEvent, self, ev) end
 		if ns.RegisterSettingsPage then
 			local ok, err = pcall(ns.RegisterSettingsPage)

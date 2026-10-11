@@ -12,8 +12,8 @@
 // For each test: fresh Lua state, loads tests/wowmock.lua, then the addon files from the .toc order
 // (Lootline.lua, Options.lua) called with ("Lootline", <shared addon table>), then the test script.
 // ?test=smoke.lua | anim.lua | options.lua | all. window.__result holds the final text output.
-const ADDON_FILES = ['Lootline.lua', 'Options.lua'];
-const ALL_TESTS = ['smoke.lua', 'anim.lua', 'options.lua', 'migrate.lua', 'migrate_custom.lua', 'fastloot.lua'];
+const ADDON_FILES = ['Lootline.lua', 'Farm.lua', 'Options.lua'];
+const ALL_TESTS = ['smoke.lua', 'anim.lua', 'options.lua', 'migrate.lua', 'migrate_custom.lua', 'fastloot.lua', 'farm.lua'];
 const NS = {};
 async function run(testFile) {
   const { lua, lauxlib, lualib, to_luastring } = fengari;

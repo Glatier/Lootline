@@ -112,7 +112,7 @@ SlashCmdList.LOOTLINE("")
 local w = __ns.optionsUI
 check(registered.opened == 42 and SettingsPanel.shown, "/lootline opens Options on the Lootline page (numeric ID)")
 check(w ~= nil and w:GetParent() == registered.frame and w:IsVisible(), "the controls are on that page")
-check(#w.tabs == 6, "6 tabs")
+check(#w.tabs == 7, "7 tabs")
 check(w.version and strip(w.version.__text):find("v9.9.9", 1, true) == 1, "the page shows the addon version from the .toc")
 check(strip(w.version.__text):find("by Lastern", 1, true) and strip(w.version.__text):find("WeakAura by Hypocrit", 1, true)
 	and not w.version.__text:find("#", 1, true), "credits: author Lastern, WeakAura by Hypocrit (no BattleTag)")

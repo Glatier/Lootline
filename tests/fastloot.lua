@@ -52,15 +52,16 @@ check(not LootFrame:IsShown(), "window closed")
 
 -- 2. on: everything at once, no window -----------------------------------------
 db.fastLoot = true
+__ns.ApplyFastLoot()
+check(not LootFrame:IsEventRegistered("LOOT_OPENED"), "on: the window's LOOT_OPENED is switched off")
 local shows, closesBefore = __lootWindowShows, __closeLootCalls
 __openLoot({ item(2589, 3), item(2770, 2), { money = true, quantity = 1 } }, "Creature-2")
 check(__lootWindowShows == shows and not LootFrame:IsShown(), "on: no loot window")
 check(#__lootSlotCalls == 3, "every slot is taken at once (got " .. #__lootSlotCalls .. ")")
-check(not LootFrame:IsEventRegistered("LOOT_OPENED"), "the window's LOOT_OPENED is switched off for this loot")
 __fire("LOOT_READY", false) -- the client can repeat LOOT_READY within one loot
 check(#__lootSlotCalls == 3, "a repeated LOOT_READY does not request the slots again")
 settle()
-check(LootFrame:IsEventRegistered("LOOT_OPENED"), "and switched back on when the loot closed")
+check(not LootFrame:IsEventRegistered("LOOT_OPENED"), "and it stays off after the loot closed (option still on)")
 check(count("3x Linen Cloth") == 1 and count("2x Copper Ore") == 1, "one bar per item (loot event and chat line counted once)")
 check(__closeLootCalls == closesBefore, "the empty loot closed by itself (Lootline did not have to close it)")
 
@@ -68,15 +69,16 @@ check(__closeLootCalls == closesBefore, "the empty loot closed by itself (Lootli
 __modifiers.AUTOLOOTTOGGLE = true
 shows = __lootWindowShows
 __openLoot({ item(2589, 1) }, "Creature-3")
-check(__lootWindowShows == shows + 1 and #__lootSlotCalls == 0, "Shift (Auto Loot key) held: the usual loot window")
+check(__lootWindowShows == shows + 1 and LootFrame:IsShown() and #__lootSlotCalls == 0, "Shift (Auto Loot key) held: the usual loot window")
 __modifiers.AUTOLOOTTOGGLE = nil
 closeWindow()
+check(not LootFrame:IsShown(), "window closed")
 
 -- 4. cases where the game needs the player: the normal window, nothing taken ------
 local function expectWindow(slots, why)
 	shows = __lootWindowShows
 	__openLoot(slots, "Creature-x")
-	check(__lootWindowShows == shows + 1 and #__lootSlotCalls == 0 and LootFrame:IsEventRegistered("LOOT_OPENED"), why)
+	check(__lootWindowShows == shows + 1 and LootFrame:IsShown() and #__lootSlotCalls == 0, why)
 	closeWindow()
 end
 __items[19019][8] = 1
@@ -91,78 +93,113 @@ check(__lootWindowShows == shows and #__lootSlotCalls == 1, "in a group, items b
 settle()
 __inGroup = nil
 __freeSlots = 0
-expectWindow({ item(2589, 1) }, "no free bag space: normal window")
 shows = __lootWindowShows
-__openLoot({ { money = true, quantity = 1 } }, "Creature-m")
-check(__lootWindowShows == shows and #__lootSlotCalls == 1, "no bag space but only money: still taken at once")
+__openLoot({ item(2589, 1) }, "Creature-b")
+check(__lootWindowShows == shows and #__lootSlotCalls == 1, "no free bag slot: still tried (it may stack); a full bag error opens the window")
 settle()
 __freeSlots = 16
-__uncached[2770] = true
-expectWindow({ item(2770, 1) }, "item the client has not loaded yet: normal window")
-__uncached[2770] = nil
 
--- 5. something fails after all: say so, end the loot, the next loot shows the window
+-- 5. items the client has not loaded yet: wait for them, the window only if they never come
+__uncached[2770] = true
+shows = __lootWindowShows
+__openLoot({ item(2589, 1), item(2770, 1) }, "Creature-u")
+check(__lootWindowShows == shows and #__lootSlotCalls == 0, "item not loaded yet: no window, nothing taken yet")
+__uncached[2770] = nil
+__tick(0.05, 4)
+check(__lootWindowShows == shows and #__lootSlotCalls == 2, "once it has loaded: everything taken, still no window")
+settle()
+__uncached[2770] = true
+__openLoot({ item(2770, 1) }, "Creature-v")
+__tick(0.05, 30)
+check(__lootWindowShows == shows + 1 and LootFrame:IsShown() and #__lootSlotCalls == 0, "an item that never loads: the window after a second")
+__uncached[2770] = nil
+closeWindow()
+
+-- 6. something fails after all: the window opens with what is left ----------------
 shows = __lootWindowShows
 local closes = __closeLootCalls
 __openLoot({ item(2589, 1), item(2770, 1, { fail = ERR_INV_FULL }) }, "Creature-9")
 check(__lootWindowShows == shows, "looks takeable: no window")
 settle()
-check(__closeLootCalls == closes + 1 and LootFrame:IsEventRegistered("LOOT_OPENED"), "a slot that could not be taken ends the hidden loot")
-check(printed("could not take everything") and printed("Copper Ore") and printed("Loot again"), "and Lootline says what was left")
+check(__lootWindowShows == shows + 1 and LootFrame:IsShown() and __closeLootCalls == closes, "a slot that could not be taken: the window opens for it")
 check(count("Linen Cloth") == 1, "what could be taken still shows its bar")
-shows = __lootWindowShows
-__openLoot({ item(2770, 1, { fail = ERR_INV_FULL }) }, "Creature-9")
-check(__lootWindowShows == shows + 1 and #__lootSlotCalls == 0, "looting that corpse again opens the window")
 closeWindow()
 shows = __lootWindowShows
-__openLoot({ item(2589, 1) }, "Creature-10")
-check(__lootWindowShows == shows, "the next corpse is fast again")
+__openLoot({ item(2589, 1) }, "Creature-9")
+check(__lootWindowShows == shows and #__lootSlotCalls == 1, "looting that corpse again (e.g. skinning it) is fast again")
 settle()
 
--- 6. the window was already open (LOOT_OPENED came first): leave it, still take everything
-LootFrame:Show()
-__lootSlots, __lootSlotCalls = { item(2589, 1) }, {}
+-- 7. event order: LOOT_OPENED before LOOT_READY, or no LOOT_READY at all ----------
+local function openOpenedFirst(slots, source, noReady)
+	__lootSlots, __lootSource, __lootSlotCalls = slots, source, {}
+	__fire("LOOT_OPENED", true, false)
+	if not noReady then __fire("LOOT_READY", true) end
+end
+shows = __lootWindowShows
+openOpenedFirst({ item(2589, 1), item(2770, 1) }, "Creature-o")
+check(__lootWindowShows == shows and not LootFrame:IsShown() and #__lootSlotCalls == 2, "LOOT_OPENED first: no window, everything taken")
+settle()
+openOpenedFirst({ item(2589, 1) }, "Creature-p", true)
+check(__lootWindowShows == shows and #__lootSlotCalls == 1, "only LOOT_OPENED: no window, everything taken")
+settle()
+__items[19019][8] = 1
+openOpenedFirst({ item(19019, 1) }, "Creature-q")
+check(__lootWindowShows == shows + 1 and LootFrame:IsShown(), "LOOT_OPENED first and the player is needed: the window")
+__items[19019][8] = nil
+closeWindow()
+-- a new loot whose LOOT_CLOSED never came
+__openLoot({ item(2589, 1, { fail = ERR_INV_FULL }) }, "Creature-r")
+__lootSlots, __lootSlotCalls = { item(2770, 1) }, {}
 __fire("LOOT_READY", false)
-check(LootFrame:IsEventRegistered("LOOT_OPENED") and #__lootSlotCalls == 1, "window already open: not touched, loot still taken at once")
+__fire("LOOT_OPENED", false, false)
+check(#__lootSlotCalls == 1 and not LootFrame:IsShown(), "a second LOOT_OPENED without LOOT_CLOSED is a new loot")
 settle()
 
--- 7. turning the option off during a loot gives the window back at once ------------
+-- 8. turning the option off during a loot gives the window back at once ------------
 SlashCmdList.LOOTLINE("") -- no Settings API in this test: the stand-alone window
 local ui = __ns.optionsUI
-check(ui and #ui.tabs == 6 and ui.tabs[6].__text == "Looting", "Looting tab")
+check(ui and #ui.tabs == 7 and ui.tabs[6].__text == "Looting" and ui.tabs[7].__text == "Farm", "Looting and Farm tabs")
 local box
 for _, o in ipairs(__allFrames) do
 	if o.__type == "CheckButton" and rawget(o, "label") and o.label.__text == "Take all loot at once, without the loot window" then box = o end
 end
 check(box and box:GetChecked(), "checkbox shows the setting")
 __openLoot({ item(2589, 1, { fail = ERR_INV_FULL }) }, "Creature-11")
-check(not LootFrame:IsEventRegistered("LOOT_OPENED"), "hidden loot in progress")
+check(not LootFrame:IsShown(), "hidden loot in progress")
 box:Click()
-check(db.fastLoot == false and LootFrame:IsEventRegistered("LOOT_OPENED"), "unticking gives the loot window back right away")
+check(db.fastLoot == false and LootFrame:IsEventRegistered("LOOT_OPENED") and LootFrame:IsShown(), "unticking gives the loot window back right away")
 closeWindow()
 SlashCmdList.LOOTLINE("fastloot")
-check(db.fastLoot == true and box:GetChecked(), "/lootline fastloot turns it on (checkbox follows)")
+check(db.fastLoot == true and box:GetChecked() and not LootFrame:IsEventRegistered("LOOT_OPENED"), "/lootline fastloot turns it on (checkbox follows)")
 __openLoot({ item(2589, 1, { fail = ERR_INV_FULL }) }, "Creature-12")
 SlashCmdList.LOOTLINE("fastloot")
-check(db.fastLoot == false and LootFrame:IsEventRegistered("LOOT_OPENED"), "and off again, giving the window back mid-loot")
+check(db.fastLoot == false and LootFrame:IsEventRegistered("LOOT_OPENED") and LootFrame:IsShown(), "and off again, giving the window back mid-loot")
 closeWindow()
 
--- 8. an empty loot (corpse clicked again before the client saw it emptied): no empty window
-db.fastLoot = true
+-- 9. an empty loot (corpse clicked again before the client saw it emptied): no empty window
+SlashCmdList.LOOTLINE("fastloot")
 shows, closes = __lootWindowShows, __closeLootCalls
 __openLoot({}, "Creature-13")
 check(__lootWindowShows == shows and not LootFrame:IsShown(), "empty loot: no empty loot window")
 settle()
-check(__closeLootCalls == closes + 1 and LootFrame:IsEventRegistered("LOOT_OPENED"), "the empty loot is closed and the window given back")
-LootFrame:Show()
-__lootSlots, __lootSlotCalls = {}, {}
-__fire("LOOT_READY", false)
-settle()
-check(not LootFrame:IsShown() and LootFrame:IsEventRegistered("LOOT_OPENED"), "empty window already open (LOOT_OPENED came first): closed")
+check(__closeLootCalls == closes + 1, "the empty loot is closed")
 db.fastLoot = false
+__ns.ApplyFastLoot()
 shows = __lootWindowShows
 __openLoot({}, "Creature-14")
 check(__lootWindowShows == shows + 1, "off: an empty loot opens the window as before")
 closeWindow()
+
+-- 10. /lootline debug says why the window opened -----------------------------------
+db.fastLoot = true
+__ns.ApplyFastLoot()
+SlashCmdList.LOOTLINE("debug")
+__items[19019][8] = 1
+__openLoot({ item(19019, 1) }, "Creature-15")
+check(printed("loot window: Bind on Pickup"), "debug: the reason is printed")
+__items[19019][8] = nil
+closeWindow()
+SlashCmdList.LOOTLINE("defaults")
+check(db.fastLoot == false and LootFrame:IsEventRegistered("LOOT_OPENED"), "defaults: option off, window's event given back")
 
 print(("RESULT: %d failure(s)"):format(failures))
